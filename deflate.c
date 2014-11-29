@@ -164,7 +164,13 @@ struct static_tree_desc_s {int dummy;}; /* for buggy compilers */
  *    input characters, so that a running hash key can be computed from the
  *    previous key instead of complete recalculation each time.
  */
-#define UPDATE_HASH(s,h,c) (h = (((h)<<s->hash_shift) ^ (c)) & s->hash_mask)
+
+#ifndef __SSE4_2__
+#define UPDATE_HASH(s,h,str) (h =  *(uInt*)(str - 2), h ^= h>>17, h ^= h >> 10, h  &= s->hash_mask)
+#else
+#include <immintrin.h>
+#define UPDATE_HASH(s,h,str) (h = _mm_crc32_u32(0,  *(uInt*)(str - 2)) & s->hash_mask)
+#endif
 
 
 /* ===========================================================================
@@ -179,12 +185,12 @@ struct static_tree_desc_s {int dummy;}; /* for buggy compilers */
  */
 #ifdef FASTEST
 #define INSERT_STRING(s, str, match_head) \
-   (UPDATE_HASH(s, s->ins_h, s->window[(str) + (MIN_MATCH-1)]), \
+   (UPDATE_HASH(s, s->ins_h, &s->window[(str) + (MIN_MATCH-1)]), \
     match_head = s->head[s->ins_h], \
     s->head[s->ins_h] = (Pos)(str))
 #else
 #define INSERT_STRING(s, str, match_head) \
-   (UPDATE_HASH(s, s->ins_h, s->window[(str) + (MIN_MATCH-1)]), \
+   (UPDATE_HASH(s, s->ins_h, &s->window[(str) + (MIN_MATCH-1)]), \
     match_head = s->prev[(str) & s->w_mask] = s->head[s->ins_h], \
     s->head[s->ins_h] = (Pos)(str))
 #endif
@@ -365,7 +371,7 @@ int ZEXPORT deflateSetDictionary (strm, dictionary, dictLength)
         str = s->strstart;
         n = s->lookahead - (MIN_MATCH-1);
         do {
-            UPDATE_HASH(s, s->ins_h, s->window[str + MIN_MATCH-1]);
+            UPDATE_HASH(s, s->ins_h, &s->window[str + MIN_MATCH-1]);
 #ifndef FASTEST
             s->prev[str & s->w_mask] = s->head[s->ins_h];
 #endif
@@ -1130,7 +1136,122 @@ local void lm_init (s)
 #endif
 #endif
 }
+#ifdef __x86_64
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
 
+static uInt longest_match(s, cur_match)
+    deflate_state *s;
+    IPos cur_match;                             /* current match */
+{
+    unsigned chain_length = s->max_chain_length;/* max hash chain length */
+    register Bytef *scan = s->window + s->strstart; /* current string */
+    register Bytef *match;                       /* matched string */
+    register int len;                           /* length of current match */
+    int best_len = s->prev_length;              /* best match length so far */
+    int nice_match = s->nice_match;             /* stop if match long enough */
+    IPos limit = s->strstart > (IPos)MAX_DIST(s) ?
+        s->strstart - (IPos)MAX_DIST(s) : NIL;
+
+    //printf("In longest nice: %d, best: %d, limit %d\n", nice_match, best_len, limit);
+    /* Stop when cur_match becomes <= limit. To simplify the code,
+     * we prevent matches with the string of window index 0.
+     */
+    Posf *prev = s->prev;
+    uInt wmask = s->w_mask;
+
+    register Bytef *strend = s->window + s->strstart + MAX_MATCH;
+    register uInt scan_start = *(uInt*)scan;
+    register ush scan_end   = *(ushf*)(scan+best_len-1);
+
+    /* The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+     */
+    Assert(s->hash_bits >= 8 && MAX_MATCH == 258, "Code too clever");
+
+    /* Do not waste too much time if we already have a good match: */
+    if (s->prev_length >= s->good_match) {
+        chain_length >>= 2;
+    }
+    /* Do not look for matches beyond the end of the input. This is necessary
+     * to make deflate deterministic.
+     */
+    if ((uInt)nice_match > s->lookahead) nice_match = s->lookahead;
+
+    Assert((ulg)s->strstart <= s->window_size-MIN_LOOKAHEAD, "need lookahead");
+    do {
+        Assert(cur_match < s->strstart, "no future");
+
+        /* Skip to next match if the match length cannot increase
+         * or if the match length is less than 2.  Note that the checks below
+         * for insufficient lookahead only occur occasionally for performance
+         * reasons.  Therefore uninitialized memory will be accessed, and
+         * conditional jumps will be made that depend on those values.
+         * However the length of the match is limited to the lookahead, so
+         * the output of deflate is not affected by the uninitialized values.
+         */
+        typeof(s->window) win = s->window;
+        do {
+            match = win + cur_match;
+            if (unlikely(*(ushf*)(match+best_len-1) == scan_end) && *(uInt*)match == scan_start) {
+                break;
+            } else {
+                if ((cur_match = prev[cur_match & wmask]) <= limit
+                    || --chain_length == 0) {
+                    goto breakout;
+                    break;
+                }
+            }
+        } while (1);
+        /* It is not necessary to compare scan[2] and match[2] since they are
+         * always equal when the other bytes match, given that the hash keys
+         * are equal and that HASH_BITS >= 8. Compare 2 bytes at a time at
+         * strstart+3, +5, ... up to strstart+257. We check for insufficient
+         * lookahead only every 4th comparison; the 128th check will be made
+         * at strstart+257. If MAX_MATCH-2 is not a multiple of 8, it is
+         * necessary to put more guard bytes at the end of the window, or
+         * to check more often for insufficient lookahead.
+         */
+        scan += 4, match+=4;
+        Assert(*scan == *match, "match[2]?");
+        do {
+            unsigned long sv = *(unsigned long*)(void*)scan;
+            unsigned long mv = *(unsigned long*)(void*)match;
+            unsigned long xor = sv ^ mv;
+            if (unlikely(xor!=0)) {
+                int match_byte = __builtin_ctzl(xor) / 8;
+                scan += match_byte;
+                match += match_byte;
+                break;
+            } else {
+                scan += sizeof(unsigned long);
+                match += sizeof(unsigned long);
+            }
+       } while (scan < strend);
+
+        if (scan > strend)
+            scan = strend;
+
+        Assert(scan <= s->window+(unsigned)(s->window_size-1), "wild scan");
+
+        len = MAX_MATCH - (int)(strend - scan);
+        scan = strend - MAX_MATCH;
+
+        if (len > best_len) {
+            s->match_start = cur_match;
+            best_len = len;
+            if (len >= nice_match) break;
+            scan_end = *(ushf*)(scan+best_len-1);
+        }
+    } while ((cur_match = prev[cur_match & wmask]) > limit
+             && --chain_length != 0);
+    breakout:
+
+    if ((uInt)best_len <= s->lookahead) return (uInt)best_len;
+    return s->lookahead;
+}
+
+#else
 #ifndef FASTEST
 /* ===========================================================================
  * Set match_start to the longest match starting at the given string and
@@ -1348,7 +1469,7 @@ local uInt longest_match(s, cur_match)
 }
 
 #endif /* FASTEST */
-
+#endif /* __SSE42__ */
 #ifdef DEBUG
 /* ===========================================================================
  * Check that the match at match_start is indeed a match.
@@ -1471,12 +1592,12 @@ local void fill_window(s)
         if (s->lookahead + s->insert >= MIN_MATCH) {
             uInt str = s->strstart - s->insert;
             s->ins_h = s->window[str];
-            UPDATE_HASH(s, s->ins_h, s->window[str + 1]);
+            UPDATE_HASH(s, s->ins_h, &s->window[str + 1]);
 #if MIN_MATCH != 3
             Call UPDATE_HASH() MIN_MATCH-3 more times
 #endif
             while (s->insert) {
-                UPDATE_HASH(s, s->ins_h, s->window[str + MIN_MATCH-1]);
+                UPDATE_HASH(s, s->ins_h, &s->window[str + MIN_MATCH-1]);
 #ifndef FASTEST
                 s->prev[str & s->w_mask] = s->head[s->ins_h];
 #endif
@@ -1694,7 +1815,7 @@ local block_state deflate_fast(s, flush)
                 s->strstart += s->match_length;
                 s->match_length = 0;
                 s->ins_h = s->window[s->strstart];
-                UPDATE_HASH(s, s->ins_h, s->window[s->strstart+1]);
+                UPDATE_HASH(s, s->ins_h, &s->window[s->strstart+1]);
 #if MIN_MATCH != 3
                 Call UPDATE_HASH() MIN_MATCH-3 more times
 #endif

@@ -32,7 +32,7 @@ TOOFAR_OK=
 #CFLAGS = -O2
 #CFLAGS = -O2 -fomit-frame-pointer -Wall
 #CFLAGS = -Os -fomit-frame-pointer -Wall
-CFLAGS = -O3 -funroll-loops -fomit-frame-pointer -Wall -Wshadow
+CFLAGS = -O3 -funroll-loops -fomit-frame-pointer -Wall -Wshadow -msse4.2
 # [note that -Wall is a gcc-specific compilation flag ("all warnings on")]
 
 LDFLAGS =
