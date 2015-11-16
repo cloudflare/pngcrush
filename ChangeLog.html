@@ -3,8 +3,46 @@
 
 Change log:
 
+Version 1.7.88 (built with libpng-1.6.19 and zlib-1.2.8)
+  Eliminated a potential overflow while adding iTXt chunk (over-length
+    text_lang or text_lang_key), reported by Coverity.
+
+Version 1.7.87 (built with libpng-1.6.18 and zlib-1.2.8)
+  Fixed a double-free bug (CVE-2015-7700). There was a "free" of the
+    sPLT chunk structure in pngcrush and then again in png.c (Bug report
+    by Brian Carpenter).
+  Added common-law trademark notice and export control information.
+  Rearranged some paragraphs in the comments at the beginning of pngcrush.c
+  Increased some buffer sizes in an attempt to prevent possible overflows.
+
+Version 1.7.86 (built with libpng-1.6.18 and zlib-1.2.8)
+  Increased maximum size of a text chunk input from 260 to 2048
+    (STR_BUF_SIZE) bytes, to agree with the help screen (bug report by
+    Tamas Jursonovics).
+  Fixed bug that caused text chunks after IDAT to be written only when
+    the "-save" option is used.
+
+Version 1.7.85 (built with libpng-1.6.16 and zlib-1.2.8)
+  Improved reporting of invalid chunk names. Does not try to put
+    non-printable characters in STDERR; displays hex numbers instead.
+  Fixed include path for utime.h on MSVC (Louis McLaughlin).
+  Eliminated "FAR" memory support (it was removed from libpng at version
+    1.6.0).
+  Disabled the "-already_crushed" option which does not really work well.
+
+Version 1.7.84 (built with libpng-1.6.16 and zlib-1.2.8)
+  Cleaned up more Coverity-scan warnings. Fixing those also fixed
+    CVE-2015-2158.
+
+Version 1.7.83 (built with libpng-1.6.16 and zlib-1.2.8)
+  Cleaned up some Coverity-scan warnings.  Unfortunately one of these
+    changes introduced the vulnerability reported in CVE-2015-2158.
+
+Version 1.7.82 (built with libpng-1.6.16 and zlib-1.2.8)
+
 Version 1.7.81 (built with libpng-1.6.15 and zlib-1.2.8)
-  Fixed off-by-one error in calculation of plte_len. Bug report by Ivan Kuchin.
+  Fixed off-by-one error in calculation of plte_len. Bug reports by
+    Ivan Kuchin and Frederic Kayser.
 
 Version 1.7.80 (built with libpng-1.6.14 and zlib-1.2.8)
   Added "-reduce_palette" and "-noreduce_palette" options.  Enable
